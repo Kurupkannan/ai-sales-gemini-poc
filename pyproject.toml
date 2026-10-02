@@ -1,0 +1,30 @@
+[project]
+name = "ai-sales-gemini-poc"
+version = "0.1.0"
+description = "Standalone Proof-of-Concept: Exotel Phone Call <-> Gemini Live API"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "edge-tts>=7.2.8",
+    "fastapi>=0.141.1",
+    "google-genai>=2.25.0",
+    "httpx>=0.28.1",
+    "miniaudio>=1.71",
+    "numpy>=2.4.6",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.3",
+    "scipy>=1.17.1",
+    "uvicorn[standard]>=0.54.0",
+    "websockets>=16.1.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-mock>=3.16.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
