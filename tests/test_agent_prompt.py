@@ -1,6 +1,6 @@
 """Tests for agent prompt module and persona configuration."""
 
-from app.config import settings
+from app.config import Settings
 from app.gemini.agent_prompt import INITIAL_GREETING, SYSTEM_INSTRUCTION
 
 
@@ -20,5 +20,6 @@ def test_agent_prompt_system_instruction_key_requirements():
 
 
 def test_config_defaults_use_agent_prompt():
+    settings = Settings(_env_file=None)
     assert settings.INITIAL_GREETING == INITIAL_GREETING
     assert settings.SYSTEM_INSTRUCTION == SYSTEM_INSTRUCTION

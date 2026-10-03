@@ -2,6 +2,14 @@
 
 Standalone Proof-of-Concept for connecting **Real Exotel Phone Calls** to **Google Gemini Live API** via bidirectional WebSockets.
 
+## Supabase database foundation
+
+See [Supabase setup and connection guide](docs/SUPABASE_SETUP.md) for project
+setup, separate database roles, TLS, environment variables and migration commands.
+The lead upload/list/detail workspace is implemented. Build `fe/` with `npm run build`,
+then start this backend and open `http://127.0.0.1:8000/ui/`. Saving live
+calls/transcripts is the next phase.
+
 ---
 
 ## 1. What This POC Does

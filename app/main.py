@@ -15,7 +15,10 @@ import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, status
 from pydantic import BaseModel, Field
 
+from app.api.leads import router as leads_router
+from app.api.upload_limit import UploadSizeLimit
 from app.config import settings
+from app.db.session import database
 from app.exotel.websocket import handle_exotel_websocket
 
 # Configure logging
@@ -36,8 +39,11 @@ async def lifespan(app: FastAPI):
         logger.info("Configured StreamUrl: %s", settings.websocket_stream_url)
     else:
         logger.warning("PUBLIC_BASE_URL is not set! Set it before triggering calls.")
-    yield
-    logger.info("Shutting down ai-sales-gemini-poc service")
+    try:
+        yield
+    finally:
+        await database.dispose()
+        logger.info("Shutting down ai-sales-gemini-poc service")
 
 
 app = FastAPI(
@@ -47,6 +53,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+app.add_middleware(UploadSizeLimit)
+app.include_router(leads_router)
 
 class HealthResponse(BaseModel):
     status: str = "ok"
@@ -183,3 +192,12 @@ async def trigger_test_call(payload: TestCallRequest):
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to communicate with Exotel: {exc}",
         )
+
+
+# A built frontend is served on the same origin; Vite proxies /api in development.
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+frontend_dist = Path(__file__).resolve().parents[2] / "fe" / "dist"
+if frontend_dist.is_dir():
+    app.mount("/ui", StaticFiles(directory=frontend_dist, html=True), name="lead-ui")

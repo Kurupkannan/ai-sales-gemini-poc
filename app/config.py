@@ -1,7 +1,8 @@
 """Application configuration loaded from environment variables."""
 
 from urllib.parse import urlparse
-from pydantic import Field
+from typing import Literal
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +18,18 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    # Supabase PostgreSQL (optional until configured; credentials never appear in repr).
+    DATABASE_URL: SecretStr = SecretStr("")
+    DATABASE_PASSWORD: SecretStr = SecretStr("")
+    MIGRATION_DATABASE_URL: SecretStr = SecretStr("")
+    DB_POOL_SIZE: int = Field(default=5, ge=1, le=50)
+    DB_MAX_OVERFLOW: int = Field(default=0, ge=0, le=50)
+    DB_POOL_TIMEOUT_SECONDS: int = Field(default=10, ge=1)
+    DB_CONNECT_TIMEOUT_SECONDS: int = Field(default=10, ge=1)
+    DB_STATEMENT_TIMEOUT_MS: int = Field(default=15000, ge=1)
+    DB_SSLMODE: Literal["verify-full", "disable"] = "verify-full"
+    DB_SSLROOTCERT: str = ""
 
     # Gemini settings
     GEMINI_API_KEY: str = Field(default="", description="Google Gemini API key")
