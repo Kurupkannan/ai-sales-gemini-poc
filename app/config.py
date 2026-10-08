@@ -19,6 +19,20 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    APP_ENV: Literal["development", "staging", "production"] = "development"
+    FIREBASE_PROJECT_ID: str = ""
+    GOOGLE_APPLICATION_CREDENTIALS: str = ""
+    AUTH_REQUIRE_ADMIN_MFA: bool = False
+    APP_FRONTEND_URL: str = "http://localhost:5173/ui/"
+    AUTH_OUTBOX_KEY: SecretStr = SecretStr("")
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: SecretStr = SecretStr("")
+    SMTP_FROM: str = ""
+    SMTP_STARTTLS: bool = True
+    EXOTEL_ORGANIZATION_ID: str = ""
+
     # Supabase PostgreSQL (optional until configured; credentials never appear in repr).
     DATABASE_URL: SecretStr = SecretStr("")
     DATABASE_PASSWORD: SecretStr = SecretStr("")
@@ -30,6 +44,17 @@ class Settings(BaseSettings):
     DB_STATEMENT_TIMEOUT_MS: int = Field(default=15000, ge=1)
     DB_SSLMODE: Literal["verify-full", "disable"] = "verify-full"
     DB_SSLROOTCERT: str = ""
+
+    # Private Embedded Signup prototype; never enable on a public operator API.
+    WHATSAPP_PROTOTYPE_ENABLED: bool = False
+    META_APP_ID: str = ""
+    META_APP_SECRET: SecretStr = SecretStr("")
+    META_EMBEDDED_SIGNUP_CONFIG_ID: str = ""
+    META_GRAPH_API_VERSION: str = ""
+    META_WEBHOOK_VERIFY_TOKEN: SecretStr = SecretStr("")
+    WHATSAPP_ENCRYPTION_KEY: SecretStr = SecretStr("")
+    WHATSAPP_ALLOWED_ORIGINS: str = ""
+    WHATSAPP_COOKIE_SECURE: bool = True
 
     # Gemini settings
     GEMINI_API_KEY: str = Field(default="", description="Google Gemini API key")

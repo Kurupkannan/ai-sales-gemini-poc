@@ -1,3 +1,4 @@
+from app.db.base import TenantRecord
 from datetime import datetime
 from uuid import UUID
 from sqlalchemy import (
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, MutableRecord
 
 
-class Conversation(MutableRecord, Base):
+class Conversation(TenantRecord, MutableRecord, Base):
     __tablename__ = "conversations"
     __table_args__ = (
         ForeignKeyConstraint(

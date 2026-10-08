@@ -11,6 +11,8 @@ from app.db.session import Database, DatabaseConfigurationError
 
 TABLES = (
     "import_batches",
+    "whatsapp_connections",
+    "whatsapp_webhook_receipts",
     "leads",
     "lead_contacts",
     "consent_events",
@@ -84,7 +86,7 @@ async def check_database(db: Database) -> None:
                     raise DatabaseCheckError(
                         f"Runtime is missing {privilege} on {name}."
                     )
-            expected_update = table not in ("consent_events", "import_batches")
+            expected_update = table not in ("consent_events", "import_batches", "whatsapp_webhook_receipts")
             if (
                 await conn.scalar(
                     text("SELECT has_table_privilege(current_user, :table, 'UPDATE')"),

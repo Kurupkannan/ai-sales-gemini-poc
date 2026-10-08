@@ -1,17 +1,19 @@
-from sqlalchemy import CheckConstraint, String, Integer
+from app.db.base import TenantRecord
+from sqlalchemy import CheckConstraint, String, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, Record
 
 
-class ImportBatch(Record, Base):
+class ImportBatch(TenantRecord, Record, Base):
     __tablename__ = "import_batches"
     __table_args__ = (
+        UniqueConstraint("organization_id", "fingerprint", name="uq_import_batches_org_fingerprint"),
         CheckConstraint("total_rows >= 0 AND imported_rows >= 0 AND duplicate_rows >= 0 AND invalid_rows >= 0", name="counts"),
         CheckConstraint("total_rows = imported_rows + duplicate_rows + invalid_rows", name="total"),
     )
     filename: Mapped[str] = mapped_column(String(255))
-    fingerprint: Mapped[str] = mapped_column(String(64), unique=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
     total_rows: Mapped[int] = mapped_column(Integer)
     imported_rows: Mapped[int] = mapped_column(Integer)
     duplicate_rows: Mapped[int] = mapped_column(Integer)

@@ -12,6 +12,13 @@ from app.config import settings
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def authorized_stream(monkeypatch):
+    monkeypatch.setattr('app.main.claim_stream', AsyncMock(return_value='authorized-test-call'))
+    async def monitor(websocket, ident, handler):
+        await handler(websocket)
+    monkeypatch.setattr('app.main.monitor_stream', monitor)
+
 class DummyServerContent:
     def __init__(self, pcm_24k: bytes, turn_complete: bool = True, interrupted: bool = False):
         part = types.Part(inline_data=types.Blob(data=pcm_24k, mime_type="audio/pcm;rate=24000"))

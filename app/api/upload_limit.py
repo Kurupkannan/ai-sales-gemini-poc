@@ -9,7 +9,7 @@ class UploadSizeLimit:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["method"] != "POST" or not scope["path"].startswith("/api/imports"):
+        if scope["type"] != "http" or scope["method"] != "POST" or "/imports" not in scope["path"]:
             return await self.app(scope, receive, send)
         limit = MAX_BYTES + 64 * 1024  # Allow multipart headers and column mapping.
         received = 0

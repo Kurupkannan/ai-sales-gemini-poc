@@ -1,5 +1,8 @@
 # AI Sales Gemini POC
 
+**Authentication is now required.** Follow [Firebase and organization setup](docs/AUTH_SETUP.md)
+before opening the workspace. This supersedes the anonymous pilot instructions below.
+
 Standalone Proof-of-Concept for connecting **Real Exotel Phone Calls** to **Google Gemini Live API** via bidirectional WebSockets.
 
 ## Supabase database foundation
@@ -230,3 +233,7 @@ uv run pytest -v
 - [Exotel Connect Voice AI API](https://developer.exotel.com/docs/agentstream/connect-voice-ai)
 - [Google Gemini Live API SDK](https://ai.google.dev/gemini-api/docs/live-api/get-started-sdk)
 - [Google Gemini Live API Capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities)
+
+## WhatsApp Embedded Signup prototype
+
+The private pilot now includes a **WhatsApp** frontend screen, Meta authorization-code exchange, encrypted per-connection credentials, asset verification, webhook subscription, optional new-number registration, and local disconnect. It stays disabled until configured. See [setup and environment guide](docs/WHATSAPP_EMBEDDED_SIGNUP.md). This phase does not send messages or enable public customer onboarding.

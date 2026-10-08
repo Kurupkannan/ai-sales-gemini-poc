@@ -1,3 +1,4 @@
+from app.db.base import TenantRecord
 from uuid import UUID
 from sqlalchemy import CheckConstraint, String, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
@@ -5,7 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, MutableRecord
 
 
-class Lead(MutableRecord, Base):
+class Lead(TenantRecord, MutableRecord, Base):
     __tablename__ = "leads"
     __table_args__ = (
         CheckConstraint(

@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, status
+from fastapi import FastAPI, HTTPException, WebSocket, status, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.api.leads import router as leads_router
@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.APP_ENV == "production" and not settings.AUTH_REQUIRE_ADMIN_MFA:
+        raise RuntimeError("Production requires AUTH_REQUIRE_ADMIN_MFA=true")
     logger.info("Starting ai-sales-gemini-poc service")
     logger.info("Gemini Model configured: %s", settings.GEMINI_LIVE_MODEL)
     logger.info("Exotel Region: %s", settings.EXOTEL_REGION)
@@ -50,18 +52,63 @@ app = FastAPI(
     title="AI Sales Gemini POC",
     description="Proof of concept: Exotel AgentStream <-> Gemini Live API",
     version="0.1.0",
+    docs_url=None if settings.APP_ENV == "production" else "/docs",
+    redoc_url=None if settings.APP_ENV == "production" else "/redoc",
+    openapi_url=None if settings.APP_ENV == "production" else "/openapi.json",
     lifespan=lifespan,
 )
 
 
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+@app.exception_handler(IntegrityError)
+async def conflict_error(request, exc):
+    return JSONResponse({'detail': 'This change conflicts with an existing record. Refresh and retry.'}, status_code=409)
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error(request, exc):
+    return JSONResponse({'detail': 'Database unavailable. Check configuration and migrations.'}, status_code=503)
+
+@app.middleware('http')
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['X-Frame-Options'] = 'DENY'
+    if request.url.path.startswith('/api'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
 app.add_middleware(UploadSizeLimit)
 app.include_router(leads_router)
+from app.api.identity import router as identity_router
+app.include_router(identity_router)
+from app.api.whatsapp import router as whatsapp_router
+app.include_router(whatsapp_router)
+from app.whatsapp.middleware import WhatsAppLimits
+app.add_middleware(WhatsAppLimits)
+
+# Pydantic error responses must not echo authorization codes or registration PINs.
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    if "/whatsapp" in request.url.path or "/invitations" in request.url.path:
+        return JSONResponse({'detail': 'Invalid WhatsApp request. Check the required fields.'}, status_code=422)
+    return await request_validation_exception_handler(request, exc)
+
 
 class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+from app.auth.dependencies import require_permission
+from app.auth.calls import authorize_call, claim_stream, monitor_stream, finish_call
+
 class TestCallRequest(BaseModel):
+    contact_id: str
+    idempotency_key: str = Field(min_length=16, max_length=100)
     to_number: str = Field(
         ...,
         description="Customer phone number with country code, e.g. +91XXXXXXXXXX or 0XXXXXXXXXX",
@@ -100,11 +147,14 @@ async def health_check():
 @app.websocket("/exotel/media")
 async def websocket_exotel_media(websocket: WebSocket):
     """Bidirectional WebSocket endpoint for Exotel AgentStream."""
-    await handle_exotel_websocket(websocket)
+    authorization = await claim_stream(websocket)
+    if not authorization:
+        await websocket.close(code=1008); return
+    await monitor_stream(websocket, authorization, handle_exotel_websocket)
 
 
-@app.post("/test-call", response_model=TestCallResponse)
-async def trigger_test_call(payload: TestCallRequest):
+@app.post("/api/orgs/{org_id}/calls", response_model=TestCallResponse)
+async def trigger_test_call(payload: TestCallRequest, request: Request, identity=Depends(require_permission("calls.create"))):
     """Triggers an outbound phone call via Exotel's Connect Voice AI API."""
     stream_url = settings.websocket_stream_url
     if not stream_url:
@@ -128,6 +178,8 @@ async def trigger_test_call(payload: TestCallRequest):
             detail="EXOTEL_EXOPHONE is not configured.",
         )
 
+    stream_token = await authorize_call(request.state.organization_id, identity, payload)
+    stream_url += "?token=" + stream_token
     url = settings.exotel_connect_url
     auth = (settings.EXOTEL_API_KEY, settings.EXOTEL_API_TOKEN)
 
@@ -146,12 +198,7 @@ async def trigger_test_call(payload: TestCallRequest):
         "StreamType": "bidirectional",
     }
 
-    logger.info(
-        "Initiating outbound call to %s via Exotel ExoPhone %s with StreamUrl %s",
-        payload.to_number,
-        settings.EXOTEL_EXOPHONE,
-        stream_url,
-    )
+    logger.info("Initiating authorized outbound call for organization %s", request.state.organization_id)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -163,10 +210,11 @@ async def trigger_test_call(payload: TestCallRequest):
             )
 
         if response.status_code >= 400:
-            logger.error("Exotel API error (status %d): %s", response.status_code, response.text)
+            await finish_call(stream_token, "failed")
+            logger.error("Exotel API error (status %d)", response.status_code)
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Exotel API returned error {response.status_code}: {response.text}",
+                detail="Call provider rejected the request.",
             )
 
         # Parse Exotel response safely
@@ -177,20 +225,22 @@ async def trigger_test_call(payload: TestCallRequest):
             if isinstance(call_obj, dict):
                 call_sid = call_obj.get("Sid")
 
+        await finish_call(stream_token, "initiated", call_sid)
         logger.info("Call successfully queued with Exotel. CallSid: %s", call_sid)
         return TestCallResponse(
             status="initiated",
             message="Outbound call initiated successfully",
-            stream_url=stream_url,
+            stream_url=settings.websocket_stream_url,
             call_sid=call_sid,
-            details=resp_json if resp_json else {"raw_response": response.text[:200]},
+            details=None,
         )
 
     except httpx.RequestError as exc:
-        logger.error("Failed to connect to Exotel API: %s", exc)
+        await finish_call(stream_token, "unknown")
+        logger.error("Call provider request failed or timed out")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to communicate with Exotel: {exc}",
+            detail="Call provider result is uncertain. Do not retry this request.",
         )
 
 

@@ -7,6 +7,23 @@ from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
 from app.main import app
+from app.auth.dependencies import organization_access
+from fastapi import Request
+from uuid import UUID
+
+ORG = "10000000-0000-4000-8000-000000000001"
+
+@pytest.fixture(autouse=True)
+def authorized_call(monkeypatch):
+    async def authorized(request: Request):
+        request.state.organization_id = UUID(ORG)
+        request.state.permissions = {"calls.create"}
+        return object()
+    app.dependency_overrides[organization_access] = authorized
+    monkeypatch.setattr("app.main.authorize_call", AsyncMock(return_value="test-stream-token"))
+    monkeypatch.setattr("app.main.finish_call", AsyncMock())
+    yield
+    app.dependency_overrides.pop(organization_access, None)
 
 
 @pytest.mark.asyncio
@@ -16,7 +33,7 @@ async def test_outbound_missing_public_base_url():
         settings.PUBLIC_BASE_URL = ""
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.post("/test-call", json={"to_number": "+919876543210"})
+            response = await client.post(f"/api/orgs/{ORG}/calls", json={"to_number": "+919876543210", "contact_id": ORG, "idempotency_key": "unique-call-request"})
             assert response.status_code == 400
             assert "PUBLIC_BASE_URL is not configured" in response.json()["detail"]
     finally:
@@ -52,7 +69,7 @@ async def test_exotel_outbound_request_construction():
 
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                response = await client.post("/test-call", json={"to_number": "+919876543210"})
+                response = await client.post(f"/api/orgs/{ORG}/calls", json={"to_number": "+919876543210", "contact_id": ORG, "idempotency_key": "unique-call-request"})
 
                 assert response.status_code == 200
                 data = response.json()
@@ -70,7 +87,7 @@ async def test_exotel_outbound_request_construction():
                 form_data = call_kwargs["data"]
                 assert form_data["From"] == "+919876543210"
                 assert form_data["CallerId"] == "04954269828"
-                assert form_data["StreamUrl"] == "wss://myserver.ngrok-free.app/exotel/media"
+                assert form_data["StreamUrl"] == "wss://myserver.ngrok-free.app/exotel/media?token=test-stream-token"
                 assert form_data["StreamType"] == "bidirectional"
 
                 auth = call_kwargs["auth"]

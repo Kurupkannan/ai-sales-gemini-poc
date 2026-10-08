@@ -22,3 +22,12 @@ wheels/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local authentication credentials and emulator diagnostics
+.auth-role-secrets
+firebase-debug.log
+*-debug.log
+.firebase/
+
+# Local service-account credentials
+/creds/

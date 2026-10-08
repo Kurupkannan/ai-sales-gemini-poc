@@ -1,10 +1,11 @@
+from app.db.base import TenantRecord
 from uuid import UUID
 from sqlalchemy import CheckConstraint, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, MutableRecord
 
 
-class LeadContact(MutableRecord, Base):
+class LeadContact(TenantRecord, MutableRecord, Base):
     __tablename__ = "lead_contacts"
     __table_args__ = (
         CheckConstraint("phone_number ~ '^\\+[1-9][0-9]{1,14}$'", name="e164"),

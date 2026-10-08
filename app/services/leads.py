@@ -17,7 +17,7 @@ def batch_dict(batch):
 async def prepare_import(session: AsyncSession, sheet: Sheet, mapping: dict, country: str):
     valid, issues = normalize_rows(sheet, mapping, country)
     phones = [row["phone"] for row in valid]
-    existing = set((await session.scalars(select(LeadContact.phone_number).where(LeadContact.phone_number.in_(phones)))).all()) if phones else set()
+    existing = set((await session.scalars(select(LeadContact.phone_number).where(LeadContact.phone_number.in_(phones), LeadContact.organization_id == session.info["organization_id"]))).all()) if phones else set()
     accepted, duplicate_count = [], 0
     seen = set()
     for row in valid:
@@ -39,12 +39,12 @@ async def commit_import(session, sheet, data, filename, mapping, country):
     digest = fingerprint(data, mapping, country)
     async with session.begin():
         # Serializes imports across API processes; lock ends at transaction completion.
-        await session.execute(text("SELECT pg_advisory_xact_lock(748392105)"))
-        previous = await session.scalar(select(ImportBatch).where(ImportBatch.fingerprint == digest))
+        await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:org, 0))"), {"org": str(session.info["organization_id"])})
+        previous = await session.scalar(select(ImportBatch).where(ImportBatch.fingerprint == digest, ImportBatch.organization_id == session.info["organization_id"]))
         if previous:
             return {**batch_dict(previous), "already_imported": True}
         accepted, summary = await prepare_import(session, sheet, mapping, country)
-        batch = ImportBatch(id=uuid4(), filename=Path(filename.replace('\\', '/')).name[:255], fingerprint=digest,
+        batch = ImportBatch(organization_id=session.info["organization_id"], id=uuid4(), filename=Path(filename.replace('\\', '/')).name[:255], fingerprint=digest,
                             mapping=mapping, country=country,
                             **{k: summary[k] for k in ("total_rows", "imported_rows", "duplicate_rows", "invalid_rows", "issues")})
         session.add(batch)
@@ -52,11 +52,11 @@ async def commit_import(session, sheet, data, filename, mapping, country):
         leads, contacts, preferences = [], [], []
         for row in accepted:
             lead_id, contact_id = uuid4(), uuid4()
-            leads.append({"id": lead_id, "name": row["name"] or None, "email": row["email"] or None,
+            leads.append({"organization_id": session.info["organization_id"], "id": lead_id, "name": row["name"] or None, "email": row["email"] or None,
                           "source": row["source"] or None, "preferred_language": row["preferred_language"] or None,
                           "notes": row["notes"] or None, "extra_fields": row["extra_fields"], "import_batch_id": batch.id})
-            contacts.append({"id": contact_id, "lead_id": lead_id, "phone_number": row["phone"], "channel": "voice"})
-            preferences.append({"id": uuid4(), "contact_id": contact_id, "suppressed": True, "reason": "consent_unknown"})
+            contacts.append({"organization_id": session.info["organization_id"], "id": contact_id, "lead_id": lead_id, "phone_number": row["phone"], "channel": "voice"})
+            preferences.append({"organization_id": session.info["organization_id"], "id": uuid4(), "contact_id": contact_id, "suppressed": True, "reason": "consent_unknown"})
         if leads:
             await session.execute(Lead.__table__.insert(), leads)
             await session.execute(LeadContact.__table__.insert(), contacts)

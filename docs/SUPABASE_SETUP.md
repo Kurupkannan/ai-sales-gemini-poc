@@ -1,5 +1,10 @@
 # Supabase connection and lead workspace
 
+**Auth rollout:** runtime must now use a restricted role, and business data is
+organization-scoped. Follow [AUTH_SETUP.md](AUTH_SETUP.md) for migration and credential
+setup. The historical `postgres` runtime examples below are not permitted by the
+authenticated application.
+
 The backend uses one Supabase PostgreSQL database. The current local setup uses
 your existing `postgres` account for both API access and migrations. No Supabase
 Auth or application login is required; future authentication is deferred to SSO

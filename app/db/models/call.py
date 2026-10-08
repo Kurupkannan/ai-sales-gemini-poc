@@ -1,3 +1,4 @@
+from app.db.base import TenantRecord
 from datetime import datetime
 from uuid import UUID
 from sqlalchemy import (
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, MutableRecord, Record
 
 
-class CallSession(MutableRecord, Base):
+class CallSession(TenantRecord, MutableRecord, Base):
     __tablename__ = "call_sessions"
     __table_args__ = (
         UniqueConstraint("id", "conversation_id"),
@@ -39,7 +40,7 @@ class CallSession(MutableRecord, Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class TranscriptTurn(Record, Base):
+class TranscriptTurn(TenantRecord, Record, Base):
     __tablename__ = "transcript_turns"
     __table_args__ = (
         ForeignKeyConstraint(

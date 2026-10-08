@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy import DateTime, MetaData, ForeignKey, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -34,3 +34,8 @@ class MutableRecord(Record):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), server_onupdate=func.now()
     )
+
+
+class TenantRecord:
+    """All business data requires an explicit organization."""
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey('app.organizations.id'), index=True)

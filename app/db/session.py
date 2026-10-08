@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from sqlalchemy import URL, make_url
+from sqlalchemy import URL, make_url, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings, settings
@@ -138,3 +138,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
             yield session
         finally:
             await session.rollback()
+
+
+# Reapply transaction-local tenant context after EVERY commit, including provider I/O.
+from sqlalchemy import event
+from sqlalchemy.orm import Session as SyncSession
+@event.listens_for(SyncSession, 'after_begin')
+def tenant_context(session, transaction, connection):
+    org = session.info.get('organization_id')
+    connection.execute(text("SELECT set_config('app.organization_id', :org, true)"), {'org': str(org) if org else ''})

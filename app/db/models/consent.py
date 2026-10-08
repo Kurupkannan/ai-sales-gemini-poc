@@ -1,3 +1,4 @@
+from app.db.base import TenantRecord
 from datetime import datetime
 from uuid import UUID
 from sqlalchemy import (
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, MutableRecord, Record
 
 
-class ConsentEvent(Record, Base):
+class ConsentEvent(TenantRecord, Record, Base):
     __tablename__ = "consent_events"
     __table_args__ = (
         CheckConstraint("action IN ('granted', 'revoked')", name="action"),
@@ -28,7 +29,7 @@ class ConsentEvent(Record, Base):
     evidence: Mapped[dict] = mapped_column(JSONB, server_default="{}")
 
 
-class ContactPreference(MutableRecord, Base):
+class ContactPreference(TenantRecord, MutableRecord, Base):
     __tablename__ = "contact_preferences"
     __table_args__ = (UniqueConstraint("contact_id"),)
     contact_id: Mapped[UUID] = mapped_column(ForeignKey("app.lead_contacts.id"))

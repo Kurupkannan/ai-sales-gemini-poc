@@ -50,17 +50,22 @@ def test_fingerprint_normalizes_optional_mappings():
     assert fingerprint(b'file', {'phone': 'Phone'}, 'IN') != fingerprint(b'file', {'phone': 'Phone'}, 'US')
 
 
-async def test_inspection_endpoint_and_request_size_limit():
+async def test_inspection_endpoint_and_request_size_limit(monkeypatch):
     from app.main import app
     from httpx import AsyncClient, ASGITransport
+    from app.auth.dependencies import organization_access
+    from fastapi import Request
+    async def allowed(request: Request):
+        request.state.permissions = {'leads.import'}
+    monkeypatch.setitem(app.dependency_overrides, organization_access, allowed)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-        response = await client.post('/api/imports/inspect', files={'file': ('a.csv', b'Name,Phone\nAnu,9876543210\n')})
+        response = await client.post('/api/orgs/10000000-0000-4000-8000-000000000001/imports/inspect', files={'file': ('a.csv', b'Name,Phone\nAnu,9876543210\n')})
         assert response.status_code == 200 and response.json()['mapping']['phone'] == 'Phone'
-        response = await client.post('/api/imports/inspect', content=b'x', headers={'content-length': str(MAX_BYTES + 100000)})
+        response = await client.post('/api/orgs/10000000-0000-4000-8000-000000000001/imports/inspect', content=b'x', headers={'content-length': str(MAX_BYTES + 100000)})
         assert response.status_code == 413
         async def chunks():
             for _ in range(7): yield b'x' * 1024 * 1024
-        response = await client.post('/api/imports/inspect', content=chunks(), headers={'content-type': 'multipart/form-data; boundary=test'})
+        response = await client.post('/api/orgs/10000000-0000-4000-8000-000000000001/imports/inspect', content=chunks(), headers={'content-type': 'multipart/form-data; boundary=test'})
         assert response.status_code in (400, 413)  # malformed multipart can fail before the body limit
 
 

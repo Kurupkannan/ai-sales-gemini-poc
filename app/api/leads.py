@@ -2,24 +2,27 @@ import json
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 from uuid import UUID
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Request
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select, func, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import organization_access, require_permission
 from app.db.session import get_session, DatabaseConfigurationError
 from app.db.models import Lead, LeadContact, ContactPreference, ImportBatch
 from app.services.lead_sheets import read_sheet, suggested_mapping, missing_required, validate_mapping, SheetError, MAX_BYTES
 from app.services.leads import prepare_import, commit_import, batch_dict
 
-router = APIRouter(prefix="/api", tags=["Leads"])
+router = APIRouter(prefix="/api/orgs/{org_id}", tags=["Leads"], dependencies=[Depends(organization_access)])
 
 
-async def session_dependency():
+async def session_dependency(request: Request):
     try:
         async with asynccontextmanager(get_session)() as session:
+            session.info["organization_id"] = getattr(request.state, "organization_id", None)
+            session.info["identity"] = getattr(request.state, "identity", None)
             yield session
     except (SQLAlchemyError, DatabaseConfigurationError):
         raise HTTPException(503, "Database unavailable. Check the backend connection and run migrations, then retry.") from None
@@ -52,7 +55,7 @@ def mapping_value(raw, sheet, country):
 @router.get("/database/status")
 async def database_status(session: Session):
     version = await session.scalar(text("SELECT version_num FROM app.alembic_version"))
-    if version != "0002":
+    if version not in ("0004",):
         raise HTTPException(503, "Database needs migrations. Run alembic upgrade head.")
     await session.execute(select(Lead.id).limit(0))
     return {"status": "connected"}
@@ -63,7 +66,7 @@ async def template():
     return Response("name,phone,email,source,language,notes\r\n", media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="lead-template.csv"'})
 
 
-@router.post("/imports/inspect")
+@router.post("/imports/inspect", dependencies=[Depends(require_permission("leads.import"))])
 async def inspect_file(file: UploadFile = File(...)):
     _, sheet = await uploaded(file)
     mapping = suggested_mapping(sheet.headers)
@@ -73,7 +76,7 @@ async def inspect_file(file: UploadFile = File(...)):
             "missing_required": missing_required(mapping)}
 
 
-@router.post("/imports/preview")
+@router.post("/imports/preview", dependencies=[Depends(require_permission("leads.import"))])
 async def preview(session: Session, file: UploadFile = File(...), mapping: str = Form(...), country: str = Form("IN")):
     _, sheet = await uploaded(file)
     parsed = mapping_value(mapping, sheet, country)
@@ -81,7 +84,7 @@ async def preview(session: Session, file: UploadFile = File(...), mapping: str =
     return result
 
 
-@router.post("/imports", status_code=201)
+@router.post("/imports", status_code=201, dependencies=[Depends(require_permission("leads.import"))])
 async def import_file(session: Session, file: UploadFile = File(...), mapping: str = Form(...), country: str = Form("IN")):
     data, sheet = await uploaded(file)
     parsed = mapping_value(mapping, sheet, country)
@@ -90,7 +93,7 @@ async def import_file(session: Session, file: UploadFile = File(...), mapping: s
 
 @router.get("/imports")
 async def imports(session: Session):
-    items = (await session.scalars(select(ImportBatch).order_by(ImportBatch.created_at.desc(), ImportBatch.id.desc()).limit(10))).all()
+    items = (await session.scalars(select(ImportBatch).where(ImportBatch.organization_id == session.info["organization_id"]).order_by(ImportBatch.created_at.desc(), ImportBatch.id.desc()).limit(10))).all()
     return [batch_dict(batch) for batch in items]
 
 
@@ -100,7 +103,7 @@ async def leads(session: Session, q: str = Query("", max_length=200),
                 page: int = Query(1, ge=1, le=100000), page_size: int = Query(20, ge=1, le=100)):
     phone = select(func.min(LeadContact.phone_number)).where(LeadContact.lead_id == Lead.id).scalar_subquery()
     query = select(Lead.id, Lead.name, Lead.email, Lead.source, Lead.status, Lead.preferred_language, Lead.created_at, phone.label("phone"))
-    conditions = []
+    conditions = [Lead.organization_id == session.info["organization_id"]]
     if status:
         conditions.append(Lead.status == status)
     if q.strip():
@@ -110,14 +113,14 @@ async def leads(session: Session, q: str = Query("", max_length=200),
                               Lead.id.in_(select(LeadContact.lead_id).where(LeadContact.phone_number.ilike(pattern, escape='\\')))))
     count = await session.scalar(select(func.count()).select_from(Lead).where(*conditions))
     items = (await session.execute(query.where(*conditions).order_by(Lead.created_at.desc(), Lead.id.desc()).offset((page - 1) * page_size).limit(page_size))).mappings().all()
-    stats = dict((await session.execute(select(Lead.status, func.count()).group_by(Lead.status))).all())
+    stats = dict((await session.execute(select(Lead.status, func.count()).where(Lead.organization_id == session.info["organization_id"]).group_by(Lead.status))).all())
     return {"items": [dict(row) for row in items], "total": count, "page": page, "page_size": page_size,
             "stats": {"total": sum(stats.values()), "new": stats.get("new", 0), "qualified": stats.get("qualified", 0)}}
 
 
 @router.get("/leads/{lead_id}")
 async def lead_detail(lead_id: UUID, session: Session):
-    lead = await session.get(Lead, lead_id)
+    lead = await session.scalar(select(Lead).where(Lead.id == lead_id, Lead.organization_id == session.info["organization_id"]))
     if not lead:
         raise HTTPException(404, "Lead not found.")
     contacts = (await session.execute(select(LeadContact.phone_number, LeadContact.channel, LeadContact.verification_state,
