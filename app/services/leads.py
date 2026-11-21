@@ -1,9 +1,33 @@
 """Lead persistence and atomic spreadsheet import."""
+from starlette.concurrency import run_in_threadpool
 from pathlib import Path
 from uuid import uuid4
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Lead, LeadContact, ContactPreference, ImportBatch
+from app.db.session import database
+from app.config import settings
+
+
+async def release_unknown_consent():
+    """Unblock numbers held only because permission was never recorded (older imports).
+
+    Deliberate blocks (opt-outs, wrong numbers, operator blocks) keep their own reasons.
+    """
+    if settings.CALLS_REQUIRE_PERMISSION:
+        return 0
+    async with database.transaction() as session:
+        result = await session.execute(update(ContactPreference).where(
+            ContactPreference.suppressed.is_(True), ContactPreference.reason == "consent_unknown",
+        ).values(suppressed=False, reason="allowed_on_import"))
+        return result.rowcount
+
+
+def default_preference():
+    """Calling preference for a newly imported/added number."""
+    if settings.CALLS_REQUIRE_PERMISSION:
+        return {"suppressed": True, "reason": "consent_unknown"}
+    return {"suppressed": False, "reason": "allowed_on_import"}
 from app.services.lead_sheets import Sheet, normalize_rows, fingerprint
 
 
@@ -15,7 +39,7 @@ def batch_dict(batch):
 
 
 async def prepare_import(session: AsyncSession, sheet: Sheet, mapping: dict, country: str):
-    valid, issues = normalize_rows(sheet, mapping, country)
+    valid, issues = await run_in_threadpool(normalize_rows, sheet, mapping, country)
     phones = [row["phone"] for row in valid]
     existing = set((await session.scalars(select(LeadContact.phone_number).where(LeadContact.phone_number.in_(phones), LeadContact.organization_id == session.info["organization_id"]))).all()) if phones else set()
     accepted, duplicate_count = [], 0
@@ -39,7 +63,8 @@ async def commit_import(session, sheet, data, filename, mapping, country):
     digest = fingerprint(data, mapping, country)
     async with session.begin():
         # Serializes imports across API processes; lock ends at transaction completion.
-        await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:org, 0))"), {"org": str(session.info["organization_id"])})
+        if not database.is_sqlite:  # SQLite transactions already hold the write lock.
+            await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:org, 0))"), {"org": str(session.info["organization_id"])})
         previous = await session.scalar(select(ImportBatch).where(ImportBatch.fingerprint == digest, ImportBatch.organization_id == session.info["organization_id"]))
         if previous:
             return {**batch_dict(previous), "already_imported": True}
@@ -56,7 +81,7 @@ async def commit_import(session, sheet, data, filename, mapping, country):
                           "source": row["source"] or None, "preferred_language": row["preferred_language"] or None,
                           "notes": row["notes"] or None, "extra_fields": row["extra_fields"], "import_batch_id": batch.id})
             contacts.append({"organization_id": session.info["organization_id"], "id": contact_id, "lead_id": lead_id, "phone_number": row["phone"], "channel": "voice"})
-            preferences.append({"organization_id": session.info["organization_id"], "id": uuid4(), "contact_id": contact_id, "suppressed": True, "reason": "consent_unknown"})
+            preferences.append({"organization_id": session.info["organization_id"], "id": uuid4(), "contact_id": contact_id, **default_preference()})
         if leads:
             await session.execute(Lead.__table__.insert(), leads)
             await session.execute(LeadContact.__table__.insert(), contacts)

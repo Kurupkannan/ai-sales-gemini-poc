@@ -31,3 +31,6 @@ firebase-debug.log
 
 # Local service-account credentials
 /creds/
+
+# Local SQLite database
+/data/

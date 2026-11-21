@@ -10,7 +10,7 @@ from sqlalchemy import (
     String,
 )
 from sqlalchemy.orm import Mapped, mapped_column
-from app.db.base import Base, MutableRecord
+from app.db.base import Base, MutableRecord, UTCDateTime
 
 
 class Conversation(TenantRecord, MutableRecord, Base):
@@ -38,5 +38,5 @@ class Conversation(TenantRecord, MutableRecord, Base):
     channel: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20), server_default="pending")
     automation_mode: Mapped[str] = mapped_column(String(20), server_default="automated")
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

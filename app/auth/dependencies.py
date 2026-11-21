@@ -2,14 +2,15 @@ from dataclasses import dataclass
 from uuid import UUID
 from typing import Annotated
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import select, text
-from sqlalchemy.dialects.postgresql import insert
 from starlette.concurrency import run_in_threadpool
+from firebase_admin import auth as firebase_auth, exceptions as firebase_errors
+from google.auth.exceptions import TransportError
+from requests.exceptions import RequestException
+from app.timing import measure
 from app.auth.firebase import verify_token
 from app.auth.permissions import ROLES
+from app.auth.store import store
 from app.config import settings
-from app.db.session import database
-from app.db.models.identity import User, Organization, Membership
 
 @dataclass
 class Identity:
@@ -33,24 +34,25 @@ async def current_user(request: Request):
     if not authorization.startswith('Bearer '):
         raise HTTPException(401, 'Sign in to continue.', headers={'WWW-Authenticate': 'Bearer'})
     try:
-        claims = await run_in_threadpool(verify_token, authorization[7:])
+        with measure("auth"):
+            claims = await run_in_threadpool(verify_token, authorization[7:])
     except RuntimeError:
         raise HTTPException(503, 'Authentication is not configured.') from None
+    except (firebase_auth.CertificateFetchError, firebase_errors.UnavailableError,
+            firebase_errors.DeadlineExceededError, firebase_errors.InternalError,
+            TransportError, RequestException):
+        raise HTTPException(503, 'Authentication service unavailable. Retry shortly.') from None
     except Exception:
         raise HTTPException(401, 'Your session expired or is invalid. Sign in again.') from None
     if not claims.get('email_verified') or not claims.get('email'):
         raise HTTPException(403, 'Verify your email address before continuing.')
-    async with database.transaction() as session:
-        unsafe = await session.scalar(text("SELECT rolsuper OR rolbypassrls OR rolcreaterole OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND pg_has_role(current_user,c.relowner,'MEMBER')) FROM pg_roles WHERE rolname=current_user"))
-        if unsafe:
-            raise HTTPException(503, 'Configure the restricted application database role before enabling sign-in.')
-        await session.execute(insert(User).values(firebase_uid=claims['uid'], email=claims['email'].lower(),
-            display_name=claims.get('name', '')[:200]).on_conflict_do_nothing(index_elements=[User.firebase_uid]))
-        user = await session.scalar(select(User).where(User.firebase_uid == claims['uid']))
-        if not user.active:
-            raise HTTPException(403, 'Your account is suspended.')
+    user = await store.ensure_user(claims['uid'], claims['email'], claims.get('name', ''))
+    if not user.active:
+        raise HTTPException(403, 'Your account is suspended.')
+    if user.email != claims['email'].lower():
         user.email = claims['email'].lower()
-        identity = Identity(user.id, user.firebase_uid, user.email, user.platform_admin, claims)
+        await store.save_user(user)
+    identity = Identity(user.id, user.firebase_uid, user.email, user.platform_admin, claims)
     request.state.identity = identity
     return identity
 
@@ -67,14 +69,12 @@ PlatformAdmin = Annotated[Identity, Depends(platform_admin)]
 async def organization_access(request: Request, identity: CurrentUser):
     try: org_id = UUID(request.path_params['org_id'])
     except (ValueError, KeyError): raise HTTPException(404, 'Organization not found.') from None
-    async with database.transaction() as session:
-        org = await session.get(Organization, org_id)
-        member = await session.scalar(select(Membership).where(Membership.organization_id == org_id,
-            Membership.user_id == identity.id, Membership.status == 'active'))
-        if not org or not member: raise HTTPException(404, 'Organization not found.')
-        if org.status != 'active': raise HTTPException(403, 'This organization is not active.')
-        if member.role == 'org_admin': admin_assurance(identity)
-        permissions = ROLES.get(member.role, frozenset())
+    org, member = await store.get_org(org_id), await store.membership(org_id, identity.id)
+    if not org or not member or member.status != 'active':
+        raise HTTPException(404, 'Organization not found.')
+    if org.status != 'active': raise HTTPException(403, 'This organization is not active.')
+    if member.role == 'org_admin': admin_assurance(identity)
+    permissions = ROLES.get(member.role, frozenset())
     request.state.organization_id = org_id
     request.state.permissions = permissions
     return identity

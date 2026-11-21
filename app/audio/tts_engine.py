@@ -13,7 +13,7 @@ MALE_TTS_VOICE = "ml-IN-MidhunNeural"     # Male Malayalam Neural Voice
 
 
 async def synthesize_text_to_pcm8k(text: str, voice_name: str = DEFAULT_TTS_VOICE) -> bytes:
-    """Synthesizes input text into 8000 Hz 16-bit signed mono PCM audio bytes for Exotel stream."""
+    """Synthesizes input text into 8000 Hz 16-bit signed mono PCM audio bytes for telephony stream."""
     clean_text = text.strip() if text else ""
     if not clean_text:
         return b""
@@ -39,7 +39,7 @@ async def synthesize_text_to_pcm8k(text: str, voice_name: str = DEFAULT_TTS_VOIC
             gcd = np.gcd(8000, decoded.sample_rate)
             up = 8000 // gcd
             down = decoded.sample_rate // gcd
-            resampled = scipy.signal.resample_poly(samples, up=up, down=down)
+            resampled = scipy.signal.resample_poly(samples.astype(np.float64), up=up, down=down)
             clipped = np.clip(resampled, -32768, 32767).astype(np.int16)
             return clipped.tobytes()
 

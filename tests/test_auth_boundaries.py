@@ -43,10 +43,21 @@ async def test_unverified_email_cannot_provision_user(monkeypatch):
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         assert (await client.get('/api/me',headers={'Authorization':'Bearer token'})).status_code == 403
 
+
+async def test_auth_provider_outage_is_not_an_invalid_session(monkeypatch):
+    from firebase_admin.exceptions import UnavailableError
+    def unavailable(token):
+        raise UnavailableError('private provider details')
+    monkeypatch.setattr(dependencies, 'verify_token', unavailable)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.get('/api/me', headers={'Authorization': 'Bearer token'})
+    assert response.status_code == 503
+    assert 'private' not in response.text
+
 def test_anonymous_media_stream_rejected():
     with TestClient(app) as client:
         with pytest.raises(WebSocketDisconnect) as exc:
-            with client.websocket_connect('/exotel/media'): pass
+            with client.websocket_connect('/plivo/media'): pass
         assert exc.value.code == 1008
 
 def test_permission_matrix():

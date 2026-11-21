@@ -60,3 +60,19 @@ def test_pcm_odd_length_handling():
 def test_pcm_empty_handling():
     assert pcm8k_to_pcm16k(b"") == b""
     assert pcm24k_to_pcm8k(b"") == b""
+
+
+def test_non_silent_resampling_preserves_amplitude_and_pitch():
+    from app.audio.converter import StreamingResampler
+    frequency, rate = 440, 24000
+    waveform = np.rint(12000*np.sin(2*np.pi*frequency*np.arange(rate)/rate)).astype('<i2')
+    result = np.frombuffer(pcm24k_to_pcm8k(waveform.tobytes()), dtype='<i2')
+    assert np.max(np.abs(result)) > 11000
+    dominant = np.argmax(np.abs(np.fft.rfft(result)))
+    assert abs(dominant-frequency) <= 1
+    stream = StreamingResampler(24000, 8000)
+    chunks = [waveform[i:i+477].tobytes() for i in range(0, len(waveform), 477)]
+    streamed = b''.join(stream.convert(chunk) for chunk in chunks)
+    whole = StreamingResampler(24000, 8000).convert(waveform.tobytes())
+    np.testing.assert_array_equal(np.frombuffer(streamed, dtype='<i2'), np.frombuffer(whole, dtype='<i2'))
+    assert max(np.frombuffer(streamed, dtype='<i2')) > 11000

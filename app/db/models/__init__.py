@@ -20,7 +20,7 @@ __all__ = [
 
 from app.db.models.whatsapp import WhatsAppConnection, WhatsAppWebhookReceipt
 
-from app.db.models.identity import User, Organization, Membership, Invitation, AuditEvent, EmailOutbox, OutboundAuthorization
+from app.db.models.identity import AuditEvent, EmailOutbox, OutboundAuthorization
 
 # Cross-organization references are rejected independently of API filtering.
 from sqlalchemy import UniqueConstraint, ForeignKeyConstraint
@@ -36,3 +36,8 @@ for model, column, parent in [(Lead, 'import_batch_id', ImportBatch), (LeadConta
     model.__table__.append_constraint(ForeignKeyConstraint(['organization_id', column],
         [f'app.{parent.__tablename__}.organization_id', f'app.{parent.__tablename__}.id'],
         name=f'fk_{model.__tablename__}_org_{column}'))
+
+OutboundAuthorization.__table__.append_constraint(ForeignKeyConstraint(
+    ['organization_id', 'call_session_id'],
+    ['app.call_sessions.organization_id', 'app.call_sessions.id'],
+    name='fk_outbound_authorizations_org_call_session_id'))

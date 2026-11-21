@@ -71,8 +71,55 @@ def connection_url(raw: str, config: Settings) -> URL:
     return url.set(drivername="postgresql+psycopg", query=query)
 
 
+def is_sqlite(raw: str) -> bool:
+    return raw.strip().startswith("sqlite")
+
+
+def build_sqlite_engine(raw: str, config: Settings):
+    """Local single-file database. Writers are serialized with BEGIN IMMEDIATE."""
+    from pathlib import Path
+    from sqlalchemy import event
+
+    url = make_url(raw.strip()).set(drivername="sqlite+aiosqlite")
+    if url.database and url.database != ":memory:":
+        Path(url.database).expanduser().parent.mkdir(parents=True, exist_ok=True)
+    engine = create_async_engine(
+        url,
+        connect_args={"timeout": config.DB_IO_TIMEOUT_SECONDS},
+        # Models live in the "app" schema on PostgreSQL; SQLite has one namespace.
+        execution_options={"schema_translate_map": {"app": None}},
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+        pool_timeout=config.DB_POOL_TIMEOUT_SECONDS,
+        hide_parameters=True,
+    )
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def configure(dbapi_connection, _record):
+        # Let SQLAlchemy own transactions so "begin" below is the only BEGIN.
+        dbapi_connection.isolation_level = None
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute(f"PRAGMA busy_timeout={config.DB_IO_TIMEOUT_SECONDS * 1000}")
+        cursor.close()
+
+    @event.listens_for(engine.sync_engine, "begin")
+    def begin(connection):
+        # Take the write lock up front: concurrent calls wait instead of failing with SQLITE_BUSY.
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+    from app.timing import install_sql_timing
+    install_sql_timing(engine)
+    return engine
+
+
 def build_engine(raw: str, config: Settings, *, migration: bool = False):
     from sqlalchemy.pool import NullPool
+
+    if is_sqlite(raw):
+        return build_sqlite_engine(raw, config)
 
     kwargs = (
         {"poolclass": NullPool}
@@ -82,17 +129,36 @@ def build_engine(raw: str, config: Settings, *, migration: bool = False):
             "max_overflow": config.DB_MAX_OVERFLOW,
             "pool_timeout": config.DB_POOL_TIMEOUT_SECONDS,
             "pool_pre_ping": True,
+            "pool_recycle": config.DB_POOL_RECYCLE_SECONDS,
         }
     )
-    return create_async_engine(
-        connection_url(raw, config),
-        connect_args={
+    url = connection_url(raw, config)
+    connect_args = {
             "connect_timeout": config.DB_CONNECT_TIMEOUT_SECONDS,
             "options": f"-c timezone=UTC -c statement_timeout={config.DB_STATEMENT_TIMEOUT_MS}",
-        },
+            "keepalives": 1, "keepalives_idle": 10,
+            "keepalives_interval": 5, "keepalives_count": 3,
+            "tcp_user_timeout": config.DB_IO_TIMEOUT_SECONDS * 1000,
+    }
+    async def connect():
+        from app.db.connection import BoundedConnection
+        from app.timing import measure
+        with measure('db_connect'):
+            connection = await BoundedConnection.connect(
+                url.set(drivername='postgresql').render_as_string(hide_password=False), **connect_args)
+            connection.io_timeout = config.DB_IO_TIMEOUT_SECONDS
+            return connection
+
+    engine = create_async_engine(
+        url,
+        async_creator=connect,
         hide_parameters=True,
         **kwargs,
     )
+
+    from app.timing import install_sql_timing
+    install_sql_timing(engine)
+    return engine
 
 
 class Database:
@@ -104,6 +170,19 @@ class Database:
     @property
     def configured(self) -> bool:
         return bool(self.config.DATABASE_URL.get_secret_value().strip())
+
+    @property
+    def is_sqlite(self) -> bool:
+        return is_sqlite(self.config.DATABASE_URL.get_secret_value())
+
+    async def prepare(self):
+        """SQLite has no Alembic history: create any missing tables on startup."""
+        if not self.configured or not self.is_sqlite:
+            return
+        from app.db.base import Base
+        from app.db import models  # noqa: F401
+        async with self.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
 
     @property
     def engine(self):
@@ -118,8 +197,10 @@ class Database:
     async def transaction(self) -> AsyncIterator[AsyncSession]:
         """Commit a successful unit of work; rollback and close on any failure."""
         self.engine
-        async with self._sessions.begin() as session:
-            yield session
+        from app.timing import measure
+        with measure("db_transaction"):
+            async with self._sessions.begin() as session:
+                yield session
 
     async def dispose(self):
         if self._engine is not None:
@@ -128,6 +209,23 @@ class Database:
 
 
 database = Database(settings)
+
+
+def log_database_error(exc):
+    """Never log exception text: it can contain SQL parameters or credentials."""
+    import logging
+    from sqlalchemy.exc import TimeoutError as PoolTimeout
+    from app.timing import current
+    timing = current.get()
+    original = getattr(exc, 'orig', None)
+    pool = database._engine.pool if database._engine else None
+    logging.getLogger(__name__).error(
+        'database_error request=%s category=%s error_type=%s driver_type=%s sqlstate=%s invalidated=%s pool=%s',
+        timing.request_id if timing else None,
+        'pool_timeout' if isinstance(exc, PoolTimeout) else 'database_operation',
+        type(exc).__name__, type(original).__name__ if original else None,
+        getattr(original, 'sqlstate', None), getattr(exc, 'connection_invalidated', False),
+        pool.status() if pool else 'not_initialized')
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
@@ -145,5 +243,13 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session as SyncSession
 @event.listens_for(SyncSession, 'after_begin')
 def tenant_context(session, transaction, connection):
+    if connection.dialect.name == 'sqlite':
+        return  # No row-level security; queries filter by organization explicitly.
     org = session.info.get('organization_id')
     connection.execute(text("SELECT set_config('app.organization_id', :org, true)"), {'org': str(org) if org else ''})
+
+
+def insert(table):
+    """INSERT supporting on_conflict_do_nothing() for the configured dialect."""
+    from sqlalchemy.dialects import postgresql, sqlite
+    return (sqlite if database.is_sqlite else postgresql).insert(table)

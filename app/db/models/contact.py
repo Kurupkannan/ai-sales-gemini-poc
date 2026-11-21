@@ -8,7 +8,8 @@ from app.db.base import Base, MutableRecord
 class LeadContact(TenantRecord, MutableRecord, Base):
     __tablename__ = "lead_contacts"
     __table_args__ = (
-        CheckConstraint("phone_number ~ '^\\+[1-9][0-9]{1,14}$'", name="e164"),
+        # Portable shape check; normalize_number() enforces full E.164 before insert.
+        CheckConstraint("substr(phone_number, 1, 1) = '+' AND length(phone_number) BETWEEN 3 AND 16", name="e164"),
         CheckConstraint("channel IN ('voice', 'whatsapp')", name="channel"),
         CheckConstraint(
             "verification_state IN ('unknown', 'verified', 'invalid')",

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy import select, update, or_, text
-from sqlalchemy.dialects.postgresql import insert
+from app.db.session import insert, database
 from sqlalchemy.exc import IntegrityError
 from app.api.leads import Session
 from app.auth.dependencies import require_permission
@@ -274,6 +274,14 @@ async def webhook(request: Request, session: Session):
     inserted = (await session.execute(insert(Receipt).values(digest=digest, entry_count=len(entries))
                     .on_conflict_do_nothing(index_elements=[Receipt.digest]).returning(Receipt.id))).scalar_one_or_none()
     if inserted:
-        await session.execute(text("SELECT app.record_whatsapp_webhook(CAST(:assets AS text[]))"), {"assets": wabas})
+        if database.is_sqlite:
+            from app.auth.store import store
+            active_orgs = [org.id for org in await store.list_orgs() if org.status == "active"]
+            await session.execute(update(Connection).where(
+                Connection.waba_id.in_(wabas), Connection.state != "disconnected",
+                Connection.organization_id.in_(active_orgs),
+            ).values(last_webhook_at=datetime.now(timezone.utc)))
+        else:
+            await session.execute(text("SELECT app.record_whatsapp_webhook(CAST(:assets AS text[]))"), {"assets": wabas})
     await session.commit()
     return {"received": True}

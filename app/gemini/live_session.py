@@ -9,6 +9,27 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
+END_CALL_TOOL = "end_call"
+
+
+def transcription_languages() -> list[str]:
+    from app.config import settings
+    return [code.strip() for code in settings.TRANSCRIPTION_LANGUAGES.split(",") if code.strip()]
+
+
+def end_call_tool() -> types.Tool:
+    return types.Tool(function_declarations=[types.FunctionDeclaration(
+        name=END_CALL_TOOL,
+        description=(
+            "Hang up the phone call. Call this only after you have spoken your final goodbye; "
+            "the line is disconnected once that goodbye finishes playing."
+        ),
+        parameters=types.Schema(type=types.Type.OBJECT, properties={
+            "reason": types.Schema(type=types.Type.STRING,
+                description="Short reason, e.g. completed, not_interested, callback, wrong_number, no_response."),
+        }),
+    )])
+
 
 def build_live_connect_config(
     system_instruction: str,
@@ -17,6 +38,9 @@ def build_live_connect_config(
     """Builds the LiveConnectConfig for Gemini Live bidirectional audio session."""
     return types.LiveConnectConfig(
         response_modalities=[types.Modality.AUDIO],
+        input_audio_transcription=types.AudioTranscriptionConfig(language_codes=transcription_languages()),
+        output_audio_transcription=types.AudioTranscriptionConfig(),
+        tools=[end_call_tool()],
         system_instruction=types.Content(
             parts=[types.Part.from_text(text=system_instruction)]
         ),
@@ -94,6 +118,18 @@ class GeminiLiveManager:
         except Exception as exc:
             logger.error("Error sending initial greeting to Gemini Live: %s", exc, exc_info=True)
             raise
+
+    async def send_instruction(self, session: any, text: str) -> None:
+        """Sends a server-side note as a user turn so the model responds without caller speech."""
+        await session.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part.from_text(text=text)]),
+            turn_complete=True,
+        )
+
+    async def send_tool_result(self, session: any, call_id: str | None, name: str, result: dict) -> None:
+        """Answers a function call, e.g. to refuse a premature end_call."""
+        await session.send_tool_response(function_responses=[
+            types.FunctionResponse(id=call_id, name=name, response=result)])
 
     async def send_audio_chunk(self, session: any, pcm_16k: bytes) -> None:
         """Sends a 16 kHz 16-bit mono PCM audio chunk to Gemini Live."""

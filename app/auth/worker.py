@@ -8,13 +8,14 @@ import smtplib
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from cryptography.fernet import Fernet
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from firebase_admin import auth
 from starlette.concurrency import run_in_threadpool
 from app.auth.firebase import firebase_app
 from app.auth.permissions import claims_for_user
+from app.auth.store import store
 from app.config import settings
-from app.db.models.identity import User, EmailOutbox, Invitation, Organization
+from app.db.models.identity import EmailOutbox
 from app.db.session import database
 
 log = logging.getLogger(__name__)
@@ -30,32 +31,37 @@ def send_mail(email, org, token):
         if settings.SMTP_USERNAME: smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD.get_secret_value())
         smtp.send_message(message)
 
+async def sync_claims():
+    # Users live in Realtime Database. One worker process; a crash simply retries.
+    for user in await store.all_users():
+        if user.permissions_version == user.claims_synced_version:
+            continue
+        if user.claims_retry_at and user.claims_retry_at > now():
+            continue
+        try:
+            # Claims sync must never re-enable an account disabled in Firebase.
+            if not user.active:
+                await run_in_threadpool(auth.update_user, user.firebase_uid, disabled=True, app=firebase_app())
+                await run_in_threadpool(auth.revoke_refresh_tokens, user.firebase_uid, app=firebase_app())
+            await run_in_threadpool(auth.set_custom_user_claims, user.firebase_uid, claims_for_user(user), app=firebase_app())
+            user.claims_synced_version = user.permissions_version
+            user.claims_retry_at = None
+        except Exception:
+            user.claims_retry_at = now()+timedelta(minutes=1)
+            log.warning('Claims synchronization failed; retry pending for user %s', user.id)
+        await store.save_user(user)
+
+
 async def tick():
-    # Row locks serialize workers and role updates. A crash retries; duplicate email
-    # delivery is harmless because invitation consumption is single use.
-    async with database.transaction() as s:
-        user = await s.scalar(select(User).where(User.permissions_version != User.claims_synced_version, or_(User.claims_retry_at.is_(None), User.claims_retry_at <= now()))
-            .order_by(User.created_at).with_for_update(skip_locked=True).limit(1))
-        if user:
-            try:
-                # Claims sync must never re-enable an account disabled in Firebase.
-                if not user.active:
-                    await run_in_threadpool(auth.update_user, user.firebase_uid, disabled=True, app=firebase_app())
-                    await run_in_threadpool(auth.revoke_refresh_tokens, user.firebase_uid, app=firebase_app())
-                snapshot = claims_for_user(user)
-                await run_in_threadpool(auth.set_custom_user_claims, user.firebase_uid, snapshot, app=firebase_app())
-                user.claims_synced_version = user.permissions_version
-                user.claims_retry_at = None
-            except Exception:
-                user.claims_retry_at = now()+timedelta(minutes=1)
-                log.warning('Claims synchronization failed; retry pending for user %s', user.id)
+    # A crash retries; duplicate email delivery is harmless because invitation consumption is single use.
+    await sync_claims()
     async with database.transaction() as s:
         mail = await s.scalar(select(EmailOutbox).where(EmailOutbox.status == 'pending', EmailOutbox.next_attempt_at <= now())
             .order_by(EmailOutbox.next_attempt_at).with_for_update(skip_locked=True).limit(1))
         if not mail: return
-        invite = await s.get(Invitation, mail.invitation_id)
-        org = await s.get(Organization, invite.organization_id)
-        if invite.status != 'pending' or invite.expires_at <= now() or org.status not in ('pending','active'):
+        invite = await store.invitation_by_id(mail.invitation_id)
+        org = await store.get_org(invite.organization_id) if invite else None
+        if not invite or not org or invite.status != 'pending' or invite.expires_at <= now() or org.status not in ('pending','active'):
             mail.status = 'cancelled'; mail.payload = None; return
         try:
             token = Fernet(settings.AUTH_OUTBOX_KEY.get_secret_value().encode()).decrypt(mail.payload.encode()).decode()

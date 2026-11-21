@@ -1,8 +1,8 @@
 """The database role is authoritative; Firebase claims are a versioned snapshot."""
 ROLES = {
     'viewer': frozenset({'leads.read'}),
-    'member': frozenset({'leads.read', 'leads.import', 'calls.create'}),
-    'org_admin': frozenset({'leads.read', 'leads.import', 'calls.create', 'members.manage', 'settings.manage', 'integrations.manage', 'audit.read'}),
+    'member': frozenset({'leads.read', 'leads.import', 'calls.create', 'calls.read'}),
+    'org_admin': frozenset({'leads.read', 'leads.import', 'calls.create', 'calls.read', 'members.manage', 'settings.manage', 'integrations.manage', 'audit.read'}),
 }
 PLATFORM_PERMISSIONS = ['organizations.manage']
 

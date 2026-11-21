@@ -90,9 +90,9 @@ the final result is authoritative. Extra columns appear in lead details. Up to
 stored. Imported contacts start suppressed with consent unknown, and uploading
 never initiates a call or message.
 
-Existing Exotel/Gemini routes remain separate; saving call transcripts is still a
+Existing Plivo/Gemini routes remain separate; saving call transcripts is still a
 future phase. `/health` is liveness; `/api/database/status` checks schema readiness.
-`PUBLIC_BASE_URL` is only for Exotel callback/audio ingress, not database access.
+`PUBLIC_BASE_URL` is only for Plivo callback/audio ingress, not database access.
 
 ## Optional restricted roles
 

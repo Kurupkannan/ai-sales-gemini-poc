@@ -6,6 +6,8 @@ import re
 import time
 import httpx
 from app.config import settings
+from app.http_clients import get_client
+from app.timing import measure
 
 
 class _NoGraphURLs(logging.Filter):
@@ -40,8 +42,8 @@ class MetaClient:
             headers["Authorization"] = f"Bearer {token}"
             query["appsecret_proof"] = hmac.new(settings.META_APP_SECRET.get_secret_value().encode(), token.encode(), hashlib.sha256).hexdigest()
         try:
-            async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-                response = await client.request(method, f"{self.base}/{path}", headers=headers,
+            with measure("meta"):
+                response = await get_client("meta", 20).request(method, f"{self.base}/{path}", headers=headers,
                                                 params=query, data=data, json=payload)
             body = response.json()
         except (httpx.HTTPError, ValueError):

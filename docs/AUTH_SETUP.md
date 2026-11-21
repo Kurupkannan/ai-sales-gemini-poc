@@ -190,7 +190,7 @@ uv run python -m app.auth.worker
 
 For the same-origin production app, build `fe/` with `npm run build` and open `/ui/`
 on FastAPI. Keep HTTPS enabled at the reverse proxy. Restrict credential-bearing
-logs; specifically redact query strings for `/exotel/media` at every ingress since
+logs; specifically redact query strings for `/plivo/media` at every ingress since
 its one-use stream credential travels in the provider's callback URL.
 
 The frontend includes login, reset, verification, MFA, invitation acceptance,
@@ -202,11 +202,11 @@ Old `/api/leads`, `/api/imports`, `/api/whatsapp`, and `/test-call` routes are r
 Business requests use `/api/orgs/{org_id}/...` and a Firebase bearer ID token.
 Provider webhooks use provider signatures, not Firebase credentials.
 
-Exotel credentials are explicitly assigned via `EXOTEL_ORGANIZATION_ID` to one org
+Plivo credentials are explicitly assigned via `PLIVO_ORGANIZATION_ID` to one org
 per deployment. Calls require an eligible, unsuppressed contact, matching number,
-and an idempotency key. Media ingress requires a one-use expiring call token and
-periodically rechecks org/member status. Multiple independent org-owned Exotel
-accounts and inbound routing are not configured by this release. Actual Exotel
+and an idempotency key. HTTP callbacks and media ingress validate Plivo V3 signatures. Media ingress also requires a one-use expiring call token and
+periodically rechecks org/member status. Multiple independent org-owned Plivo
+accounts and inbound routing are not configured by this release. Actual Plivo
 callback delivery must be verified in staging before production calls.
 
 ## Verification
@@ -242,3 +242,5 @@ configured staging services for an end-to-end deployment check.
 ### Invitations without email setup
 
 When SMTP_HOST or SMTP_FROM is unset, creating an invitation returns a one-time-displayed shareable link to the authorized administrator. Use Create invitation and Copy link in the Team screen. The recipient signs in with the invited email address and accepts it; the link expires after 72 hours. Only its hash is stored, so generate a new invitation if the link is lost (the old link is revoked). No SMTP worker or outbox encryption key is required for this mode. Set APP_FRONTEND_URL to the frontend address recipients can reach. Configuring SMTP enables the existing encrypted email delivery flow.
+
+Outbound-only telephony setup and callback URLs: [Plivo setup](PLIVO_SETUP.md).

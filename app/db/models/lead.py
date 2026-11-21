@@ -1,7 +1,7 @@
 from app.db.base import TenantRecord
 from uuid import UUID
 from sqlalchemy import CheckConstraint, String, Text, ForeignKey
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON as JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, MutableRecord
 
